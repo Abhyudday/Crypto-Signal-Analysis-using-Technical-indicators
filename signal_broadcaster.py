@@ -2,11 +2,17 @@ import asyncio
 from datetime import datetime, timedelta
 import pandas as pd
 import logging
-from config import *
+from core_types import (
+    SignalType, 
+    ConfidenceLevel, 
+    TRADING_PAIRS,
+    MIN_SIGNAL_INTERVAL,
+    ANALYSIS_INTERVAL,
+    SIGNAL_EXPIRY
+)
 from technical_analysis import TechnicalAnalyzer
 from pattern_recognition import PatternRecognizer
 from sentiment_analysis import SentimentAnalyzer
-from core_types import SignalType, ConfidenceLevel
 import time
 
 # Set up logging
