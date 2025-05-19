@@ -37,4 +37,4 @@ ENV/
 *.log
 
 # Local configuration
-config.py 
+# config.py 
