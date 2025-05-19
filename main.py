@@ -8,6 +8,9 @@ import ccxt
 import asyncio
 import signal
 import sys
+import os
+from dotenv import load_dotenv
+from aiohttp import web
 
 from technical_analysis import TechnicalAnalyzer
 from pattern_recognition import PatternRecognizer
@@ -15,6 +18,9 @@ from sentiment_analysis import SentimentAnalyzer
 from signal_broadcaster import SignalBroadcaster
 from config import *
 from core_types import SignalType, ConfidenceLevel
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(
@@ -187,12 +193,16 @@ class TradingBot:
         self.MIN_SIGNAL_INTERVAL = 3600  # Change this to adjust minimum time between signals
         self.ANALYSIS_INTERVAL = 900     # Change this to adjust how often the bot checks
         self.SIGNAL_EXPIRY = 7200       # Change this to adjust how long signals remain valid
+        self.token = os.getenv('TELEGRAM_BOT_TOKEN')
+        self.application = None
+        self.signal_broadcaster = None
+        self.chat_id = int(os.getenv('TELEGRAM_CHAT_ID', 0))
         
     async def send_message(self, chat_id: int, message: str) -> None:
         """Send a message to a specific chat."""
         try:
-            if application:
-                await application.bot.send_message(chat_id=chat_id, text=message)
+            if self.application:
+                await self.application.bot.send_message(chat_id=chat_id, text=message)
                 logger.info(f"Successfully sent message to chat {chat_id}")
             else:
                 logger.error("Application instance not available for sending message")
@@ -261,6 +271,71 @@ class TradingBot:
         
         return message
 
+    async def start(self, update, context):
+        """Send a message when the command /start is issued."""
+        await update.message.reply_text('Crypto Signal Bot is running!')
+        
+    async def help(self, update, context):
+        """Send a message when the command /help is issued."""
+        help_text = """
+Available commands:
+/start - Start the bot
+/help - Show this help message
+/status - Check bot status
+        """
+        await update.message.reply_text(help_text)
+        
+    async def status(self, update, context):
+        """Send bot status."""
+        status_text = "Bot is running and monitoring crypto signals!"
+        await update.message.reply_text(status_text)
+        
+    async def error_handler(self, update, context):
+        """Log the error and send a message to the user."""
+        logger.error(f"Update {update} caused error {context.error}")
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "An error occurred while processing your request."
+            )
+
+    async def health_check(self, request):
+        """Health check endpoint for Railway."""
+        return web.Response(text="OK")
+
+    def run(self):
+        """Start the bot."""
+        try:
+            # Create the Application
+            self.application = Application.builder().token(self.token).build()
+            
+            # Add handlers
+            self.application.add_handler(CommandHandler("start", self.start))
+            self.application.add_handler(CommandHandler("help", self.help))
+            self.application.add_handler(CommandHandler("status", self.status))
+            
+            # Add error handler
+            self.application.add_error_handler(self.error_handler)
+            
+            # Initialize signal broadcaster
+            self.signal_broadcaster = SignalBroadcaster(self, self.chat_id)
+            
+            # Start the bot
+            logger.info("Starting bot...")
+            self.application.run_polling()
+            
+        except Exception as e:
+            logger.error(f"Error starting bot: {e}")
+            raise
+
+async def start_web_server():
+    """Start the web server for health checks."""
+    app = web.Application()
+    app.router.add_get('/health', TradingBot().health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
+    await site.start()
+
 def main():
     """Start the bot."""
     global application
@@ -294,4 +369,10 @@ def main():
         sys.exit(1)
 
 if __name__ == '__main__':
-    main() 
+    # Start the web server in a separate task
+    loop = asyncio.get_event_loop()
+    loop.create_task(start_web_server())
+    
+    # Start the bot
+    bot = TradingBot()
+    bot.run() 
