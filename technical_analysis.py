@@ -36,32 +36,40 @@ class TechnicalAnalyzer:
             logger.info(f"EMA Short: {ema_short:.2f}")
             logger.info(f"EMA Long: {ema_long:.2f}")
             
-            # Determine signal based on indicators
-            signal = SignalType.HOLD
-            confidence = ConfidenceLevel.NONE
+            # Count bullish and bearish signals
+            bullish_signals = 0
+            bearish_signals = 0
             
             # RSI Analysis
             if rsi < RSI_OVERSOLD:
-                signal = SignalType.BUY
-                confidence = ConfidenceLevel.HIGH
+                bullish_signals += 1
             elif rsi > RSI_OVERBOUGHT:
-                signal = SignalType.SELL
-                confidence = ConfidenceLevel.HIGH
+                bearish_signals += 1
                 
             # MACD Analysis
-            if macd > macd_signal and signal == SignalType.BUY:
-                confidence = ConfidenceLevel.HIGH
-            elif macd < macd_signal and signal == SignalType.SELL:
-                confidence = ConfidenceLevel.HIGH
+            if macd > macd_signal:
+                bullish_signals += 1
+            elif macd < macd_signal:
+                bearish_signals += 1
                 
             # EMA Analysis
-            if ema_short > ema_long and signal == SignalType.BUY:
-                confidence = ConfidenceLevel.HIGH
-            elif ema_short < ema_long and signal == SignalType.SELL:
-                confidence = ConfidenceLevel.HIGH
-                
-            return signal, confidence
+            if ema_short > ema_long:
+                bullish_signals += 1
+            elif ema_short < ema_long:
+                bearish_signals += 1
             
+            # Determine final signal
+            if bullish_signals >= 2:
+                return SignalType.BUY, ConfidenceLevel.HIGH
+            elif bearish_signals >= 2:
+                return SignalType.SELL, ConfidenceLevel.HIGH
+            elif bullish_signals == 1:
+                return SignalType.BUY, ConfidenceLevel.MEDIUM
+            elif bearish_signals == 1:
+                return SignalType.SELL, ConfidenceLevel.MEDIUM
+            else:
+                return SignalType.HOLD, ConfidenceLevel.NONE
+                
         except Exception as e:
             logger.error(f"Error in technical analysis: {e}")
             return SignalType.HOLD, ConfidenceLevel.NONE
