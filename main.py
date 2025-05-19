@@ -8,19 +8,13 @@ import ccxt
 import asyncio
 import signal
 import sys
-import os
-from dotenv import load_dotenv
-from aiohttp import web
 
 from technical_analysis import TechnicalAnalyzer
 from pattern_recognition import PatternRecognizer
 from sentiment_analysis import SentimentAnalyzer
 from signal_broadcaster import SignalBroadcaster
 from config import *
-from core_types import SignalType, ConfidenceLevel, TELEGRAM_BOT_TOKEN
-
-# Load environment variables
-load_dotenv()
+from core_types import SignalType, ConfidenceLevel
 
 # Set up logging
 logging.basicConfig(
@@ -35,13 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Global application instance
 application = None
-
-# Initialize bot and broadcaster
-bot = TradingBot()
-broadcaster = SignalBroadcaster(bot)
-
-# Store active monitoring tasks
-active_monitors = {}
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
@@ -59,48 +46,20 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler."""
-    chat_id = update.effective_chat.id
-    if chat_id in active_monitors:
-        await update.message.reply_text("Monitoring is already active for this chat.")
-        return
-        
-    # Start monitoring for this chat
-    task = asyncio.create_task(broadcaster.start_monitoring(chat_id))
-    active_monitors[chat_id] = task
-    
-    await update.message.reply_text(
-        "🚀 Trading bot started!\n\n"
-        "I will monitor the following pairs:\n" +
-        "\n".join(f"• {pair}" for pair in broadcaster.pairs) +
-        "\n\nI'll send you signals when I detect high-confidence trading opportunities."
-    )
-
-async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Stop command handler."""
-    chat_id = update.effective_chat.id
-    if chat_id not in active_monitors:
-        await update.message.reply_text("No active monitoring for this chat.")
-        return
-        
-    # Cancel the monitoring task
-    active_monitors[chat_id].cancel()
-    del active_monitors[chat_id]
-    
-    await update.message.reply_text("🛑 Trading bot stopped. Use /start to resume monitoring.")
-
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Status command handler."""
-    chat_id = update.effective_chat.id
-    is_active = chat_id in active_monitors
-    
-    status_text = "✅ Active" if is_active else "❌ Inactive"
-    
-    await update.message.reply_text(
-        f"🤖 Bot Status: {status_text}\n\n"
-        f"Monitoring pairs:\n" +
-        "\n".join(f"• {pair}" for pair in broadcaster.pairs)
-    )
+    """Handle the /start command."""
+    try:
+        logger.info(f"Received /start command from user {update.effective_user.id}")
+        await update.message.reply_text(
+            "Welcome to the Crypto Trading Bot! 🚀\n\n"
+            "Available commands:\n"
+            "/analyze <symbol> - Analyze a cryptocurrency (e.g., /analyze BTC/USDT)\n"
+            "/monitor - Start monitoring all pairs in this chat\n"
+            "/stop_monitor - Stop monitoring in this chat\n"
+            "/help - Show this help message"
+        )
+        logger.info("Successfully sent welcome message")
+    except Exception as e:
+        logger.error(f"Error in start command: {e}")
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the /analyze command."""
@@ -114,6 +73,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Analyzing symbol: {symbol}")
         await update.message.reply_text(f"Analyzing {symbol}... Please wait.")
         
+        bot = TradingBot()
         df = await bot.get_price_data(symbol)
         
         if df is None:
@@ -130,6 +90,56 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in analyze command: {e}")
         await update.message.reply_text("Sorry, there was an error analyzing the symbol. Please try again.")
 
+async def monitor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start monitoring all pairs in the current chat."""
+    try:
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
+        logger.info(f"Received /monitor command from user {user_id} in chat {chat_id}")
+        
+        if chat_id in context.bot_data.get('broadcasters', {}):
+            logger.info(f"Monitoring already active in chat {chat_id}")
+            await update.message.reply_text("Monitoring is already active in this chat.")
+            return
+        
+        bot = TradingBot()
+        broadcaster = SignalBroadcaster(bot, chat_id)
+        
+        # Store broadcaster in bot_data
+        if 'broadcasters' not in context.bot_data:
+            context.bot_data['broadcasters'] = {}
+        context.bot_data['broadcasters'][chat_id] = broadcaster
+        
+        # Start monitoring in background
+        asyncio.create_task(broadcaster.start_monitoring())
+        
+        await update.message.reply_text(
+            "✅ Started monitoring all pairs in this chat.\n"
+            "You will receive automatic signals when trading opportunities are detected."
+        )
+        logger.info(f"Successfully started monitoring for chat {chat_id}")
+    except Exception as e:
+        logger.error(f"Error in monitor command: {e}")
+        await update.message.reply_text("Sorry, there was an error starting the monitoring. Please try again.")
+
+async def stop_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop monitoring in the current chat."""
+    try:
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
+        logger.info(f"Received /stop_monitor command from user {user_id} in chat {chat_id}")
+        
+        if chat_id in context.bot_data.get('broadcasters', {}):
+            del context.bot_data['broadcasters'][chat_id]
+            logger.info(f"Stopped monitoring in chat {chat_id}")
+            await update.message.reply_text("Stopped monitoring in this chat.")
+        else:
+            logger.info(f"No active monitoring in chat {chat_id}")
+            await update.message.reply_text("No active monitoring in this chat.")
+    except Exception as e:
+        logger.error(f"Error in stop_monitor command: {e}")
+        await update.message.reply_text("Sorry, there was an error stopping the monitoring. Please try again.")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the /help command."""
     try:
@@ -139,9 +149,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Commands:\n"
             "/analyze <symbol> - Analyze a cryptocurrency\n"
             "Example: /analyze BTC/USDT\n\n"
-            "/start - Start automatic monitoring of all pairs\n"
-            "/stop - Stop automatic monitoring\n\n"
-            "/status - Check bot status\n\n"
+            "/monitor - Start automatic monitoring of all pairs\n"
+            "/stop_monitor - Stop automatic monitoring\n\n"
             "The bot uses multiple analysis layers:\n"
             "1. Technical Analysis (RSI, MACD, EMA, BB)\n"
             "2. Pattern Recognition\n"
@@ -162,7 +171,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/start - Start the bot\n"
             "/help - Show help message\n"
             "/analyze <symbol> - Analyze a cryptocurrency\n"
-            "/status - Check bot status"
+            "/monitor - Start monitoring\n"
+            "/stop_monitor - Stop monitoring"
         )
     except Exception as e:
         logger.error(f"Error handling message: {e}")
@@ -177,16 +187,12 @@ class TradingBot:
         self.MIN_SIGNAL_INTERVAL = 3600  # Change this to adjust minimum time between signals
         self.ANALYSIS_INTERVAL = 900     # Change this to adjust how often the bot checks
         self.SIGNAL_EXPIRY = 7200       # Change this to adjust how long signals remain valid
-        self.token = os.getenv('TELEGRAM_BOT_TOKEN')
-        self.application = None
-        self.signal_broadcaster = None
-        self.chat_id = int(os.getenv('TELEGRAM_CHAT_ID', 0))
         
     async def send_message(self, chat_id: int, message: str) -> None:
         """Send a message to a specific chat."""
         try:
-            if self.application:
-                await self.application.bot.send_message(chat_id=chat_id, text=message)
+            if application:
+                await application.bot.send_message(chat_id=chat_id, text=message)
                 logger.info(f"Successfully sent message to chat {chat_id}")
             else:
                 logger.error("Application instance not available for sending message")
@@ -255,71 +261,6 @@ class TradingBot:
         
         return message
 
-    async def start(self, update, context):
-        """Send a message when the command /start is issued."""
-        await update.message.reply_text('Crypto Signal Bot is running!')
-        
-    async def help(self, update, context):
-        """Send a message when the command /help is issued."""
-        help_text = """
-Available commands:
-/start - Start the bot
-/help - Show this help message
-/status - Check bot status
-        """
-        await update.message.reply_text(help_text)
-        
-    async def status(self, update, context):
-        """Send bot status."""
-        status_text = "Bot is running and monitoring crypto signals!"
-        await update.message.reply_text(status_text)
-        
-    async def error_handler(self, update, context):
-        """Log the error and send a message to the user."""
-        logger.error(f"Update {update} caused error {context.error}")
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "An error occurred while processing your request."
-            )
-
-    async def health_check(self, request):
-        """Health check endpoint for Railway."""
-        return web.Response(text="OK")
-
-    def run(self):
-        """Start the bot."""
-        try:
-            # Create the Application
-            self.application = Application.builder().token(self.token).build()
-            
-            # Add handlers
-            self.application.add_handler(CommandHandler("start", self.start))
-            self.application.add_handler(CommandHandler("help", self.help))
-            self.application.add_handler(CommandHandler("status", self.status))
-            
-            # Add error handler
-            self.application.add_error_handler(self.error_handler)
-            
-            # Initialize signal broadcaster
-            self.signal_broadcaster = SignalBroadcaster(self, self.chat_id)
-            
-            # Start the bot
-            logger.info("Starting bot...")
-            self.application.run_polling()
-            
-        except Exception as e:
-            logger.error(f"Error starting bot: {e}")
-            raise
-
-async def start_web_server():
-    """Start the web server for health checks."""
-    app = web.Application()
-    app.router.add_get('/health', TradingBot().health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv('PORT', 8080)))
-    await site.start()
-
 def main():
     """Start the bot."""
     global application
@@ -338,7 +279,8 @@ def main():
         # Add command handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("analyze", analyze))
-        application.add_handler(CommandHandler("status", status))
+        application.add_handler(CommandHandler("monitor", monitor))
+        application.add_handler(CommandHandler("stop_monitor", stop_monitor))
         application.add_handler(CommandHandler("help", help_command))
         
         # Add message handler for non-command messages
@@ -352,10 +294,4 @@ def main():
         sys.exit(1)
 
 if __name__ == '__main__':
-    # Start the web server in a separate task
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_web_server())
-    
-    # Start the bot
-    bot = TradingBot()
-    bot.run() 
+    main() 

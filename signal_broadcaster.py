@@ -2,32 +2,36 @@ import asyncio
 from datetime import datetime, timedelta
 import pandas as pd
 import logging
-from core_types import (
-    SignalType, 
-    ConfidenceLevel, 
-    TRADING_PAIRS,
-    MIN_SIGNAL_INTERVAL,
-    ANALYSIS_INTERVAL,
-    SIGNAL_EXPIRY
-)
+from config import *
 from technical_analysis import TechnicalAnalyzer
 from pattern_recognition import PatternRecognizer
 from sentiment_analysis import SentimentAnalyzer
+from core_types import SignalType, ConfidenceLevel
 import time
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 class SignalBroadcaster:
-    def __init__(self, bot: 'TradingBot'):
+    def __init__(self, bot: 'TradingBot', chat_id: int):
         self.bot = bot
+        self.chat_id = chat_id
         self.technical_analyzer = TechnicalAnalyzer()
         self.pattern_recognizer = PatternRecognizer()
         self.sentiment_analyzer = SentimentAnalyzer()
-        logger.info("Initialized SignalBroadcaster")
+        logger.info(f"Initialized SignalBroadcaster for chat_id: {chat_id}")
         
         # List of pairs to monitor
-        self.pairs = TRADING_PAIRS
+        self.pairs = [
+            'BTC/USDT',
+            'ETH/USDT',
+            'BNB/USDT',
+            'SOL/USDT',
+            'ADA/USDT',
+            'XRP/USDT',
+            'DOT/USDT',
+            'DOGE/USDT'
+        ]
         
         # Store last signals to avoid duplicates
         self.last_signals = {}
@@ -35,9 +39,9 @@ class SignalBroadcaster:
         self.last_signal_time = {}
         
         # Signal frequency settings
-        self.MIN_SIGNAL_INTERVAL = MIN_SIGNAL_INTERVAL
-        self.ANALYSIS_INTERVAL = ANALYSIS_INTERVAL
-        self.SIGNAL_EXPIRY = SIGNAL_EXPIRY
+        self.MIN_SIGNAL_INTERVAL = 3600  # Minimum 1 hour between signals for each pair
+        self.ANALYSIS_INTERVAL = 1     # Check every 1 second
+        self.SIGNAL_EXPIRY = 7200       # Signals expire after 2 hours
 
     async def format_signal_message(self, symbol: str, signal_type: SignalType, confidence: ConfidenceLevel, df: pd.DataFrame) -> str:
         """Format the signal message for Telegram."""
@@ -75,7 +79,7 @@ class SignalBroadcaster:
         
         return message
 
-    def should_broadcast_signal(self, chat_id: int, signal_type: SignalType, confidence: ConfidenceLevel) -> bool:
+    def should_broadcast_signal(self, signal_type: SignalType, confidence: ConfidenceLevel) -> bool:
         """Determine if a signal should be broadcast based on timing and confidence."""
         current_time = time.time()
         
@@ -83,17 +87,17 @@ class SignalBroadcaster:
         if confidence != ConfidenceLevel.HIGH:
             return False
             
-        # Check if enough time has passed since last signal for this chat
-        if chat_id in self.last_signal_time and (current_time - self.last_signal_time[chat_id]) < self.MIN_SIGNAL_INTERVAL:
+        # Check if enough time has passed since last signal
+        if self.last_signal_time and (current_time - self.last_signal_time) < self.MIN_SIGNAL_INTERVAL:
             return False
             
-        # Check if this is a different signal type than the last one for this chat
-        if chat_id in self.last_signals and self.last_signals[chat_id] == signal_type:
+        # Check if this is a different signal type than the last one
+        if self.last_signal_type and self.last_signal_type == signal_type:
             return False
             
         return True
 
-    async def analyze_pair(self, symbol: str, chat_id: int):
+    async def analyze_pair(self, symbol: str):
         """Analyze a trading pair and broadcast signals if conditions are met."""
         try:
             # Get price data
@@ -149,9 +153,9 @@ class SignalBroadcaster:
                 final_confidence = ConfidenceLevel.HIGH
             
             # Check if we should broadcast this signal
-            if self.should_broadcast_signal(chat_id, final_signal, final_confidence):
+            if self.should_broadcast_signal(final_signal, final_confidence):
                 # Format the message (this is a synchronous function)
-                message = await self.format_signal_message(
+                message = self.format_signal_message(
                     symbol=symbol,
                     signal_type=final_signal,
                     confidence=final_confidence,
@@ -159,31 +163,31 @@ class SignalBroadcaster:
                 )
                 
                 # Send the message (this is an async function)
-                await self.bot.send_message(chat_id, message)
+                await self.bot.send_message(self.chat_id, message)
                 
-                # Update last signal info for this chat
-                self.last_signal_time[chat_id] = time.time()
-                self.last_signals[chat_id] = final_signal
+                # Update last signal info
+                self.last_signal_time = time.time()
+                self.last_signal_type = final_signal
                 
-                logger.info(f"Broadcast signal for {symbol} to chat {chat_id}: {final_signal} ({final_confidence})")
+                logger.info(f"Broadcast signal for {symbol}: {final_signal} ({final_confidence})")
             else:
-                logger.info(f"Skipping signal broadcast for {symbol} to chat {chat_id} - conditions not met")
+                logger.info(f"Skipping signal broadcast for {symbol} - conditions not met")
                 
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}")
 
-    async def start_monitoring(self, chat_id: int):
-        """Start monitoring all pairs for a specific chat."""
-        logger.info(f"Starting monitoring for chat_id: {chat_id}")
+    async def start_monitoring(self):
+        """Start monitoring all pairs."""
+        logger.info(f"Starting monitoring for chat_id: {self.chat_id}")
         while True:
             try:
                 for pair in self.pairs:
-                    await self.analyze_pair(pair, chat_id)
+                    await self.analyze_pair(pair)
                     await asyncio.sleep(1)  # Rate limiting
                 
                 # Wait before next round of analysis
-                logger.info(f"Completed one round of analysis for chat {chat_id}, waiting {self.ANALYSIS_INTERVAL} seconds...")
+                logger.info(f"Completed one round of analysis, waiting {self.ANALYSIS_INTERVAL} seconds...")
                 await asyncio.sleep(self.ANALYSIS_INTERVAL)
             except Exception as e:
-                logger.error(f"Error in monitoring loop for chat {chat_id}: {e}")
+                logger.error(f"Error in monitoring loop: {e}")
                 await asyncio.sleep(60)  # Wait a minute before retrying 
