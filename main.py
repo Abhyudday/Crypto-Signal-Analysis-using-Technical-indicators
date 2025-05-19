@@ -183,6 +183,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error handling message: {e}")
 
+async def getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send the chat ID when the command /getid is issued."""
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    await update.message.reply_text(
+        f"Your Chat ID: {chat_id}\n"
+        f"Your User ID: {user_id}\n\n"
+        "Please use the Chat ID in your environment variables."
+    )
+
 class TradingBot:
     def __init__(self):
         self.technical_analyzer = TechnicalAnalyzer()
@@ -357,6 +367,7 @@ def main():
         application.add_handler(CommandHandler("monitor", monitor))
         application.add_handler(CommandHandler("stop_monitor", stop_monitor))
         application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("getid", getid))
         
         # Add message handler for non-command messages
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
