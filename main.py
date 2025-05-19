@@ -17,7 +17,7 @@ from pattern_recognition import PatternRecognizer
 from sentiment_analysis import SentimentAnalyzer
 from signal_broadcaster import SignalBroadcaster
 from config import *
-from core_types import SignalType, ConfidenceLevel
+from core_types import SignalType, ConfidenceLevel, TELEGRAM_BOT_TOKEN
 
 # Load environment variables
 load_dotenv()
@@ -36,6 +36,13 @@ logger = logging.getLogger(__name__)
 # Global application instance
 application = None
 
+# Initialize bot and broadcaster
+bot = TradingBot()
+broadcaster = SignalBroadcaster(bot)
+
+# Store active monitoring tasks
+active_monitors = {}
+
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
     logger.info("Received shutdown signal. Cleaning up...")
@@ -52,20 +59,48 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /start command."""
-    try:
-        logger.info(f"Received /start command from user {update.effective_user.id}")
-        await update.message.reply_text(
-            "Welcome to the Crypto Trading Bot! 🚀\n\n"
-            "Available commands:\n"
-            "/analyze <symbol> - Analyze a cryptocurrency (e.g., /analyze BTC/USDT)\n"
-            "/monitor - Start monitoring all pairs in this chat\n"
-            "/stop_monitor - Stop monitoring in this chat\n"
-            "/help - Show this help message"
-        )
-        logger.info("Successfully sent welcome message")
-    except Exception as e:
-        logger.error(f"Error in start command: {e}")
+    """Start command handler."""
+    chat_id = update.effective_chat.id
+    if chat_id in active_monitors:
+        await update.message.reply_text("Monitoring is already active for this chat.")
+        return
+        
+    # Start monitoring for this chat
+    task = asyncio.create_task(broadcaster.start_monitoring(chat_id))
+    active_monitors[chat_id] = task
+    
+    await update.message.reply_text(
+        "🚀 Trading bot started!\n\n"
+        "I will monitor the following pairs:\n" +
+        "\n".join(f"• {pair}" for pair in broadcaster.pairs) +
+        "\n\nI'll send you signals when I detect high-confidence trading opportunities."
+    )
+
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stop command handler."""
+    chat_id = update.effective_chat.id
+    if chat_id not in active_monitors:
+        await update.message.reply_text("No active monitoring for this chat.")
+        return
+        
+    # Cancel the monitoring task
+    active_monitors[chat_id].cancel()
+    del active_monitors[chat_id]
+    
+    await update.message.reply_text("🛑 Trading bot stopped. Use /start to resume monitoring.")
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Status command handler."""
+    chat_id = update.effective_chat.id
+    is_active = chat_id in active_monitors
+    
+    status_text = "✅ Active" if is_active else "❌ Inactive"
+    
+    await update.message.reply_text(
+        f"🤖 Bot Status: {status_text}\n\n"
+        f"Monitoring pairs:\n" +
+        "\n".join(f"• {pair}" for pair in broadcaster.pairs)
+    )
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the /analyze command."""
@@ -79,7 +114,6 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Analyzing symbol: {symbol}")
         await update.message.reply_text(f"Analyzing {symbol}... Please wait.")
         
-        bot = TradingBot()
         df = await bot.get_price_data(symbol)
         
         if df is None:
@@ -96,56 +130,6 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in analyze command: {e}")
         await update.message.reply_text("Sorry, there was an error analyzing the symbol. Please try again.")
 
-async def monitor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start monitoring all pairs in the current chat."""
-    try:
-        chat_id = update.effective_chat.id
-        user_id = update.effective_user.id
-        logger.info(f"Received /monitor command from user {user_id} in chat {chat_id}")
-        
-        if chat_id in context.bot_data.get('broadcasters', {}):
-            logger.info(f"Monitoring already active in chat {chat_id}")
-            await update.message.reply_text("Monitoring is already active in this chat.")
-            return
-        
-        bot = TradingBot()
-        broadcaster = SignalBroadcaster(bot, chat_id)
-        
-        # Store broadcaster in bot_data
-        if 'broadcasters' not in context.bot_data:
-            context.bot_data['broadcasters'] = {}
-        context.bot_data['broadcasters'][chat_id] = broadcaster
-        
-        # Start monitoring in background
-        asyncio.create_task(broadcaster.start_monitoring())
-        
-        await update.message.reply_text(
-            "✅ Started monitoring all pairs in this chat.\n"
-            "You will receive automatic signals when trading opportunities are detected."
-        )
-        logger.info(f"Successfully started monitoring for chat {chat_id}")
-    except Exception as e:
-        logger.error(f"Error in monitor command: {e}")
-        await update.message.reply_text("Sorry, there was an error starting the monitoring. Please try again.")
-
-async def stop_monitor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Stop monitoring in the current chat."""
-    try:
-        chat_id = update.effective_chat.id
-        user_id = update.effective_user.id
-        logger.info(f"Received /stop_monitor command from user {user_id} in chat {chat_id}")
-        
-        if chat_id in context.bot_data.get('broadcasters', {}):
-            del context.bot_data['broadcasters'][chat_id]
-            logger.info(f"Stopped monitoring in chat {chat_id}")
-            await update.message.reply_text("Stopped monitoring in this chat.")
-        else:
-            logger.info(f"No active monitoring in chat {chat_id}")
-            await update.message.reply_text("No active monitoring in this chat.")
-    except Exception as e:
-        logger.error(f"Error in stop_monitor command: {e}")
-        await update.message.reply_text("Sorry, there was an error stopping the monitoring. Please try again.")
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle the /help command."""
     try:
@@ -155,8 +139,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Commands:\n"
             "/analyze <symbol> - Analyze a cryptocurrency\n"
             "Example: /analyze BTC/USDT\n\n"
-            "/monitor - Start automatic monitoring of all pairs\n"
-            "/stop_monitor - Stop automatic monitoring\n\n"
+            "/start - Start automatic monitoring of all pairs\n"
+            "/stop - Stop automatic monitoring\n\n"
+            "/status - Check bot status\n\n"
             "The bot uses multiple analysis layers:\n"
             "1. Technical Analysis (RSI, MACD, EMA, BB)\n"
             "2. Pattern Recognition\n"
@@ -177,21 +162,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/start - Start the bot\n"
             "/help - Show help message\n"
             "/analyze <symbol> - Analyze a cryptocurrency\n"
-            "/monitor - Start monitoring\n"
-            "/stop_monitor - Stop monitoring"
+            "/status - Check bot status"
         )
     except Exception as e:
         logger.error(f"Error handling message: {e}")
-
-async def getid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send the chat ID when the command /getid is issued."""
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    await update.message.reply_text(
-        f"Your Chat ID: {chat_id}\n"
-        f"Your User ID: {user_id}\n\n"
-        "Please use the Chat ID in your environment variables."
-    )
 
 class TradingBot:
     def __init__(self):
@@ -364,10 +338,8 @@ def main():
         # Add command handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("analyze", analyze))
-        application.add_handler(CommandHandler("monitor", monitor))
-        application.add_handler(CommandHandler("stop_monitor", stop_monitor))
+        application.add_handler(CommandHandler("status", status))
         application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("getid", getid))
         
         # Add message handler for non-command messages
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

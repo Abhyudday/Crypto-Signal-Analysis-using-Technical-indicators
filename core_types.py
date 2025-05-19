@@ -17,7 +17,6 @@ class ConfidenceLevel(Enum):
 
 # Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-TELEGRAM_CHAT_ID = int(os.getenv('TELEGRAM_CHAT_ID', 0))
 
 # Trading Configuration
 DEFAULT_TIMEFRAME = '1h'
