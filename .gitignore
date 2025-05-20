@@ -27,6 +27,8 @@ wheels/
 
 # Logs
 *.log
+logs/
+trading_bot.log
 
 # Environment variables
 .env
@@ -44,4 +46,9 @@ Thumbs.db
 
 # Railway specific
 .railway/
-railway.toml 
+railway.toml
+
+# Temporary files
+tempCodeRunnerFile.py
+*.tmp
+*.temp 
