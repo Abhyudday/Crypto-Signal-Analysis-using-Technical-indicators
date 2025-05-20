@@ -5,7 +5,9 @@ import os
 load_dotenv()
 
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # Replace with your bot token
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
 
 # API Keys
 TWITTER_API_KEY = os.getenv('TWITTER_API_KEY')
@@ -61,8 +63,8 @@ class ConfidenceLevel:
     NONE = 'NONE'
 
 # Binance API Configuration
-BINANCE_API_KEY = "YOUR_BINANCE_API_KEY"  # Replace with your Binance API key
-BINANCE_API_SECRET = "YOUR_BINANCE_API_SECRET"  # Replace with your Binance API secret
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
+BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
 # Trading Configuration
 TRADING_PAIRS = [
