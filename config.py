@@ -5,7 +5,7 @@ import os
 load_dotenv()
 
 # Telegram Configuration
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # Replace with your bot token
 
 # API Keys
 TWITTER_API_KEY = os.getenv('TWITTER_API_KEY')
@@ -58,4 +58,32 @@ class ConfidenceLevel:
     HIGH = 'HIGH'
     MEDIUM = 'MEDIUM'
     LOW = 'LOW'
-    NONE = 'NONE' 
+    NONE = 'NONE'
+
+# Binance API Configuration
+BINANCE_API_KEY = "YOUR_BINANCE_API_KEY"  # Replace with your Binance API key
+BINANCE_API_SECRET = "YOUR_BINANCE_API_SECRET"  # Replace with your Binance API secret
+
+# Trading Configuration
+TRADING_PAIRS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "ADAUSDT",
+    "XRPUSDT",
+    "DOTUSDT",
+    "DOGEUSDT"
+]
+
+# Technical Analysis Configuration
+TECHNICAL_INDICATORS = [
+    "RSI",
+    "MACD",
+    "EMA",
+    "Bollinger Bands"
+]
+
+# Signal Configuration
+SIGNAL_INTERVAL = 300  # Check for signals every 5 minutes
+SENTIMENT_ANALYSIS_ENABLED = True  # Enable/disable sentiment analysis 

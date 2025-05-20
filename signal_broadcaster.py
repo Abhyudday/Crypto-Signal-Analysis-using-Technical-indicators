@@ -1,165 +1,255 @@
 import asyncio
-from datetime import datetime, timedelta
-import pandas as pd
 import logging
-from config import *
-from technical_analysis import TechnicalAnalyzer
-from pattern_recognition import PatternRecognizer
-from sentiment_analysis import SentimentAnalyzer
-from core_types import SignalType, ConfidenceLevel
+from datetime import datetime
+from typing import Dict, List
+import aiohttp
+import pandas as pd
+import numpy as np
+from config import (
+    BINANCE_API_KEY,
+    BINANCE_API_SECRET,
+    TELEGRAM_BOT_TOKEN,
+    TRADING_PAIRS,
+    TECHNICAL_INDICATORS,
+    SENTIMENT_ANALYSIS_ENABLED,
+    SIGNAL_INTERVAL
+)
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 class SignalBroadcaster:
-    def __init__(self, bot: 'TradingBot', chat_id: int):
+    def __init__(self, bot, chat_id: int):
         self.bot = bot
         self.chat_id = chat_id
-        self.technical_analyzer = TechnicalAnalyzer()
-        self.pattern_recognizer = PatternRecognizer()
-        self.sentiment_analyzer = SentimentAnalyzer()
-        logger.info(f"Initialized SignalBroadcaster for chat_id: {chat_id}")
-        
-        # List of pairs to monitor
-        self.pairs = [
-            'BTC/USDT',
-            'ETH/USDT',
-            'BNB/USDT',
-            'SOL/USDT',
-            'ADA/USDT',
-            'XRP/USDT',
-            'DOT/USDT',
-            'DOGE/USDT'
-        ]
-        
-        # Store last signals to avoid duplicates
-        self.last_signals = {}
-        # Store last signal time for each pair
-        self.last_signal_time = {}
-        
-        # Signal frequency settings
-        self.MIN_SIGNAL_INTERVAL = 3600  # Minimum 1 hour between signals for each pair
-        self.ANALYSIS_INTERVAL = 1     # Check every 1 second
-        self.SIGNAL_EXPIRY = 7200       # Signals expire after 2 hours
-
-    async def format_signal_message(self, symbol: str, signal: SignalType, confidence: ConfidenceLevel, df: pd.DataFrame) -> str:
-        """Format the signal message for Telegram."""
-        current_price = df['close'].iloc[-1]
-        
-        # Calculate entry and exit points based on current price
-        if signal == SignalType.BUY:
-            entry = current_price * 0.99  # 1% below current price
-            stop_loss = current_price * 0.97  # 3% below current price
-            take_profit = current_price * 1.03  # 3% above current price
-        else:
-            entry = current_price * 1.01  # 1% above current price
-            stop_loss = current_price * 1.03  # 3% above current price
-            take_profit = current_price * 0.97  # 3% below current price
-            
-        message = f"🔔 Trading Signal for {symbol}\n\n"
-        message += f"Signal: {signal}\n"
-        message += f"Confidence: {confidence}\n"
-        message += f"Current Price: ${current_price:.2f}\n\n"
-        
-        # Add technical indicators
-        message += "📊 Technical Indicators:\n"
-        message += f"RSI: {self.technical_analyzer.indicators['rsi'].iloc[-1]:.2f}\n"
-        message += f"MACD: {self.technical_analyzer.indicators['macd'].iloc[-1]:.2f}\n"
-        message += f"EMA (9/21): {self.technical_analyzer.indicators['ema_short'].iloc[-1]:.2f}/{self.technical_analyzer.indicators['ema_long'].iloc[-1]:.2f}\n\n"
-        
-        # Add entry and exit points
-        message += "🎯 Trading Levels:\n"
-        message += f"Entry: ${entry:.2f}\n"
-        message += f"Stop Loss: ${stop_loss:.2f}\n"
-        message += f"Take Profit: ${take_profit:.2f}\n\n"
-        
-        # Add disclaimer
-        message += "⚠️ Disclaimer: This is not financial advice. Always do your own research before trading."
-        
-        return message
-
-    async def should_broadcast_signal(self, symbol: str, signal: SignalType) -> bool:
-        """Check if we should broadcast a new signal."""
-        current_time = datetime.now()
-        
-        # Check if we have a previous signal for this symbol
-        if symbol in self.last_signals:
-            last_signal_time, last_signal = self.last_signals[symbol]
-            
-            # Don't send if it's too soon after the last signal
-            if (current_time - last_signal_time).total_seconds() < self.MIN_SIGNAL_INTERVAL:
-                return False
-                
-            # Don't send if it's the same signal type
-            if last_signal == signal:
-                return False
-                
-            # Don't send if the last signal hasn't expired
-            if (current_time - last_signal_time).total_seconds() < self.SIGNAL_EXPIRY:
-                return False
-                
-        return True
-
-    async def analyze_pair(self, symbol: str):
-        """Analyze a trading pair and broadcast signal if conditions are met."""
-        try:
-            logger.info(f"Analyzing {symbol}...")
-            # Get price data
-            df = await self.bot.get_price_data(symbol)
-            if df is None:
-                logger.error(f"Failed to get price data for {symbol}")
-                return
-            
-            # Get signals from all layers
-            tech_signal, tech_conf = self.technical_analyzer.analyze(df)
-            pattern_signal, pattern_conf = self.pattern_recognizer.analyze(df)
-            sentiment_signal, sentiment_conf = self.sentiment_analyzer.analyze(symbol)
-            
-            logger.info(f"Signals for {symbol}: Technical={tech_signal}, Pattern={pattern_signal}, Sentiment={sentiment_signal}")
-            
-            # Count bullish and bearish signals
-            bullish_count = sum(1 for signal in [tech_signal, pattern_signal, sentiment_signal] if signal == SignalType.BUY)
-            bearish_count = sum(1 for signal in [tech_signal, pattern_signal, sentiment_signal] if signal == SignalType.SELL)
-            
-            # Determine final signal
-            if bullish_count >= 2:
-                final_signal = SignalType.BUY
-                confidence = ConfidenceLevel.HIGH
-            elif bearish_count >= 2:
-                final_signal = SignalType.SELL
-                confidence = ConfidenceLevel.HIGH
-            elif bullish_count == 1:
-                final_signal = SignalType.BUY
-                confidence = ConfidenceLevel.MEDIUM
-            elif bearish_count == 1:
-                final_signal = SignalType.SELL
-                confidence = ConfidenceLevel.MEDIUM
-            else:
-                final_signal = SignalType.HOLD
-                confidence = ConfidenceLevel.NONE
-            
-            # Check if we should broadcast this signal
-            if final_signal != SignalType.HOLD and await self.should_broadcast_signal(symbol, final_signal):
-                message = await self.format_signal_message(symbol, final_signal, confidence, df)
-                await self.bot.send_message(self.chat_id, message)
-                self.last_signals[symbol] = (datetime.now(), final_signal)
-                logger.info(f"Broadcasted {final_signal} signal for {symbol}")
-                
-        except Exception as e:
-            logger.error(f"Error analyzing {symbol}: {e}")
+        self.running = False
+        self.session = None
+        self.last_signals: Dict[str, Dict] = {}
 
     async def start_monitoring(self):
-        """Start monitoring all pairs."""
-        logger.info(f"Starting monitoring for chat_id: {self.chat_id}")
-        while True:
+        """Start monitoring markets and broadcasting signals"""
+        self.running = True
+        self.session = aiohttp.ClientSession()
+        logger.info(f"Started monitoring for chat {self.chat_id}")
+        
+        while self.running:
             try:
-                for pair in self.pairs:
-                    await self.analyze_pair(pair)
-                    await asyncio.sleep(1)  # Rate limiting
-                
-                # Wait before next round of analysis
-                logger.info(f"Completed one round of analysis, waiting {self.ANALYSIS_INTERVAL} seconds...")
-                await asyncio.sleep(self.ANALYSIS_INTERVAL)
+                signals = await self.analyze_markets()
+                if signals:
+                    await self.broadcast_signals(signals)
             except Exception as e:
-                logger.error(f"Error in monitoring loop: {e}")
-                await asyncio.sleep(60)  # Wait a minute before retrying 
+                logger.error(f"Error in monitoring loop: {str(e)}")
+            
+            await asyncio.sleep(SIGNAL_INTERVAL)
+
+    async def stop_monitoring(self):
+        """Stop monitoring markets"""
+        self.running = False
+        if self.session:
+            await self.session.close()
+        logger.info(f"Stopped monitoring for chat {self.chat_id}")
+
+    async def analyze_markets(self) -> List[Dict]:
+        """Analyze markets and generate trading signals"""
+        signals = []
+        
+        for pair in TRADING_PAIRS:
+            try:
+                # Get market data
+                klines = await self.get_klines(pair)
+                if not klines:
+                    continue
+
+                # Calculate technical indicators
+                df = self.calculate_indicators(klines)
+                
+                # Generate signal
+                signal = self.generate_signal(pair, df)
+                if signal:
+                    signals.append(signal)
+
+            except Exception as e:
+                logger.error(f"Error analyzing {pair}: {str(e)}")
+                continue
+
+        return signals
+
+    async def get_klines(self, pair: str) -> List[Dict]:
+        """Get kline/candlestick data from Binance"""
+        try:
+            url = f"https://api.binance.com/api/v3/klines"
+            params = {
+                "symbol": pair,
+                "interval": "1h",
+                "limit": 100
+            }
+            
+            async with self.session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return [
+                        {
+                            "timestamp": k[0],
+                            "open": float(k[1]),
+                            "high": float(k[2]),
+                            "low": float(k[3]),
+                            "close": float(k[4]),
+                            "volume": float(k[5])
+                        }
+                        for k in data
+                    ]
+                else:
+                    logger.error(f"Failed to get klines for {pair}: {response.status}")
+                    return []
+        except Exception as e:
+            logger.error(f"Error getting klines for {pair}: {str(e)}")
+            return []
+
+    def calculate_indicators(self, klines: List[Dict]) -> pd.DataFrame:
+        """Calculate technical indicators"""
+        df = pd.DataFrame(klines)
+        
+        # Calculate RSI
+        if "RSI" in TECHNICAL_INDICATORS:
+            delta = df["close"].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            df["RSI"] = 100 - (100 / (1 + rs))
+
+        # Calculate MACD
+        if "MACD" in TECHNICAL_INDICATORS:
+            exp1 = df["close"].ewm(span=12, adjust=False).mean()
+            exp2 = df["close"].ewm(span=26, adjust=False).mean()
+            df["MACD"] = exp1 - exp2
+            df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+
+        # Calculate EMA
+        if "EMA" in TECHNICAL_INDICATORS:
+            df["EMA20"] = df["close"].ewm(span=20, adjust=False).mean()
+            df["EMA50"] = df["close"].ewm(span=50, adjust=False).mean()
+
+        # Calculate Bollinger Bands
+        if "Bollinger Bands" in TECHNICAL_INDICATORS:
+            df["SMA20"] = df["close"].rolling(window=20).mean()
+            df["BB_upper"] = df["SMA20"] + 2 * df["close"].rolling(window=20).std()
+            df["BB_lower"] = df["SMA20"] - 2 * df["close"].rolling(window=20).std()
+
+        return df
+
+    def generate_signal(self, pair: str, df: pd.DataFrame) -> Dict:
+        """Generate trading signal based on technical analysis"""
+        if df.empty:
+            return None
+
+        current_price = df["close"].iloc[-1]
+        signal = {
+            "pair": pair,
+            "price": current_price,
+            "timestamp": datetime.now().isoformat(),
+            "indicators": {},
+            "action": None,
+            "strength": 0
+        }
+
+        # RSI Analysis
+        if "RSI" in df.columns:
+            rsi = df["RSI"].iloc[-1]
+            signal["indicators"]["RSI"] = rsi
+            if rsi < 30:
+                signal["action"] = "BUY"
+                signal["strength"] += 1
+            elif rsi > 70:
+                signal["action"] = "SELL"
+                signal["strength"] += 1
+
+        # MACD Analysis
+        if "MACD" in df.columns and "Signal" in df.columns:
+            macd = df["MACD"].iloc[-1]
+            signal_line = df["Signal"].iloc[-1]
+            signal["indicators"]["MACD"] = macd
+            if macd > signal_line:
+                if signal["action"] == "BUY":
+                    signal["strength"] += 1
+                elif signal["action"] is None:
+                    signal["action"] = "BUY"
+            elif macd < signal_line:
+                if signal["action"] == "SELL":
+                    signal["strength"] += 1
+                elif signal["action"] is None:
+                    signal["action"] = "SELL"
+
+        # EMA Analysis
+        if "EMA20" in df.columns and "EMA50" in df.columns:
+            ema20 = df["EMA20"].iloc[-1]
+            ema50 = df["EMA50"].iloc[-1]
+            signal["indicators"]["EMA20"] = ema20
+            signal["indicators"]["EMA50"] = ema50
+            if ema20 > ema50:
+                if signal["action"] == "BUY":
+                    signal["strength"] += 1
+                elif signal["action"] is None:
+                    signal["action"] = "BUY"
+            elif ema20 < ema50:
+                if signal["action"] == "SELL":
+                    signal["strength"] += 1
+                elif signal["action"] is None:
+                    signal["action"] = "SELL"
+
+        # Bollinger Bands Analysis
+        if "BB_upper" in df.columns and "BB_lower" in df.columns:
+            bb_upper = df["BB_upper"].iloc[-1]
+            bb_lower = df["BB_lower"].iloc[-1]
+            signal["indicators"]["BB_upper"] = bb_upper
+            signal["indicators"]["BB_lower"] = bb_lower
+            if current_price < bb_lower:
+                if signal["action"] == "BUY":
+                    signal["strength"] += 1
+                elif signal["action"] is None:
+                    signal["action"] = "BUY"
+            elif current_price > bb_upper:
+                if signal["action"] == "SELL":
+                    signal["strength"] += 1
+                elif signal["action"] is None:
+                    signal["action"] = "SELL"
+
+        # Only return signals with sufficient strength
+        if signal["action"] and signal["strength"] >= 2:
+            return signal
+        return None
+
+    async def broadcast_signals(self, signals: List[Dict]):
+        """Broadcast trading signals to the chat"""
+        for signal in signals:
+            try:
+                # Format the signal message
+                message = self.format_signal_message(signal)
+                
+                # Send the message
+                await self.bot.send_message(self.chat_id, message)
+                logger.info(f"Broadcasted signal for {signal['pair']} to chat {self.chat_id}")
+                
+            except Exception as e:
+                logger.error(f"Error broadcasting signal: {str(e)}")
+
+    def format_signal_message(self, signal: Dict) -> str:
+        """Format the trading signal message"""
+        action_emoji = "🟢" if signal["action"] == "BUY" else "🔴"
+        strength_stars = "⭐" * signal["strength"]
+        
+        message = (
+            f"{action_emoji} *{signal['action']} Signal* {action_emoji}\n\n"
+            f"*Pair:* {signal['pair']}\n"
+            f"*Price:* ${signal['price']:.2f}\n"
+            f"*Strength:* {strength_stars}\n\n"
+            f"*Technical Indicators:*\n"
+        )
+
+        # Add indicator values
+        for indicator, value in signal["indicators"].items():
+            if isinstance(value, float):
+                message += f"• {indicator}: {value:.2f}\n"
+            else:
+                message += f"• {indicator}: {value}\n"
+
+        message += f"\n*Time:* {signal['timestamp']}"
+        return message 
