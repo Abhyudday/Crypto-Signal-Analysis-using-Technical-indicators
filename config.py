@@ -1,8 +1,15 @@
 from dotenv import load_dotenv
 import os
+import logging
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Telegram Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -14,6 +21,13 @@ TWITTER_API_KEY = os.getenv('TWITTER_API_KEY')
 TWITTER_API_SECRET = os.getenv('TWITTER_API_SECRET')
 REDDIT_CLIENT_ID = os.getenv('REDDIT_CLIENT_ID')
 REDDIT_CLIENT_SECRET = os.getenv('REDDIT_CLIENT_SECRET')
+
+# Binance API Configuration
+BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
+BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
+
+if not BINANCE_API_KEY or not BINANCE_API_SECRET:
+    logging.warning("Binance API credentials not set. Market data will not be available.")
 
 # Technical Analysis Parameters
 RSI_PERIOD = 14
@@ -62,10 +76,6 @@ class ConfidenceLevel:
     LOW = 'LOW'
     NONE = 'NONE'
 
-# Binance API Configuration
-BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
-BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
-
 # Trading Configuration
 TRADING_PAIRS = [
     "BTCUSDT",
@@ -87,5 +97,5 @@ TECHNICAL_INDICATORS = [
 ]
 
 # Signal Configuration
-SIGNAL_INTERVAL = 300  # Check for signals every 5 minutes
+SIGNAL_INTERVAL = 60  # Check for signals every minute
 SENTIMENT_ANALYSIS_ENABLED = True  # Enable/disable sentiment analysis 
