@@ -30,6 +30,7 @@ wheels/
 
 # Environment variables
 .env
+.env.*
 
 # IDE specific files
 .idea/
@@ -39,4 +40,8 @@ wheels/
 
 # OS specific files
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Railway specific
+.railway/
+railway.toml 
