@@ -5,6 +5,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from signal_broadcaster import SignalBroadcaster
 from config import TELEGRAM_BOT_TOKEN
+import telegram
 
 
 logging.basicConfig(
@@ -181,32 +182,75 @@ class TradingBot:
     def run(self):
         """Run the bot"""
         try:
-            
             if not TELEGRAM_BOT_TOKEN:
                 logger.error("TELEGRAM_BOT_TOKEN is not set!")
                 sys.exit(1)
             
             logger.info("Starting bot...")
             logger.info(f"Bot token: {TELEGRAM_BOT_TOKEN[:5]}...{TELEGRAM_BOT_TOKEN[-5:]}")  
+            
+            # Create application with cleanup
             self.application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-           
+            
+            # Add handlers
             self.application.add_handler(CommandHandler("start", self.start))
             self.application.add_handler(CommandHandler("help", self.help))
             self.application.add_handler(CommandHandler("monitor", self.monitor))
             self.application.add_handler(CommandHandler("stop", self.stop))
-
+            
+            # Add error handler
+            self.application.add_error_handler(self.error_handler)
             
             logger.info("Starting polling...")
-            self.application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+            self.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                close_loop=False
+            )
         except Exception as e:
             logger.error(f"Error running bot: {str(e)}", exc_info=True)
             sys.exit(1)
 
+    async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle errors in the bot"""
+        try:
+            logger.error(f"Exception while handling an update: {context.error}")
+            
+            # If it's a conflict error, try to clean up
+            if isinstance(context.error, telegram.error.Conflict):
+                logger.info("Detected conflict error, attempting to clean up...")
+                try:
+                    await self.application.bot.delete_webhook()
+                    await asyncio.sleep(1)  # Wait a bit before retrying
+                except Exception as e:
+                    logger.error(f"Error during cleanup: {str(e)}")
+            
+            # Notify user if possible
+            if update and update.effective_chat:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="⚠️ Sorry, I encountered an error. Please try again in a moment."
+                )
+        except Exception as e:
+            logger.error(f"Error in error handler: {str(e)}", exc_info=True)
+
 if __name__ == "__main__":
     try:
+        # Ensure we're the only instance running
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(('localhost', 5000))
+        
         bot = TradingBot()
         bot.run()
+    except socket.error:
+        logger.error("Another instance of the bot is already running!")
+        sys.exit(1)
     except Exception as e:
         logger.error(f"Fatal error: {str(e)}", exc_info=True)
-        sys.exit(1) 
+        sys.exit(1)
+    finally:
+        try:
+            sock.close()
+        except:
+            pass 
