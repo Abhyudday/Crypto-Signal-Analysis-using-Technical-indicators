@@ -1,15 +1,19 @@
 import logging
 import asyncio
+import sys
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from signal_broadcaster import SignalBroadcaster
 from config import TELEGRAM_BOT_TOKEN
 
-# Set up logging
+# Set up logging to both file and console
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    filename='trading_bot.log'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('trading_bot.log'),
+        logging.StreamHandler(sys.stdout)  # Add console handler
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -17,6 +21,7 @@ class TradingBot:
     def __init__(self):
         self.active_chats = set()  # Store active chat IDs
         self.signal_broadcasters = {}  # Store SignalBroadcaster instances for each chat
+        logger.info("TradingBot initialized")
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
@@ -123,7 +128,14 @@ class TradingBot:
     def run(self):
         """Run the bot"""
         try:
+            # Check if token is available
+            if not TELEGRAM_BOT_TOKEN:
+                logger.error("TELEGRAM_BOT_TOKEN is not set!")
+                sys.exit(1)
+            
             logger.info("Starting bot...")
+            logger.info(f"Bot token: {TELEGRAM_BOT_TOKEN[:5]}...{TELEGRAM_BOT_TOKEN[-5:]}")  # Log first and last 5 chars of token
+            
             self.application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
             # Add command handlers
@@ -134,10 +146,15 @@ class TradingBot:
 
             # Start the bot
             logger.info("Starting polling...")
-            self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+            self.application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
         except Exception as e:
             logger.error(f"Error running bot: {str(e)}", exc_info=True)
+            sys.exit(1)
 
 if __name__ == "__main__":
-    bot = TradingBot()
-    bot.run() 
+    try:
+        bot = TradingBot()
+        bot.run()
+    except Exception as e:
+        logger.error(f"Fatal error: {str(e)}", exc_info=True)
+        sys.exit(1) 
