@@ -23,7 +23,9 @@ class SignalBroadcaster:
         self.chat_id = chat_id
         self.running = False
         self.session = None
-        self.last_signals: Dict[str, Dict] = {}
+        self.last_signals: Dict[str, Dict] = {}  # Store last signal for each pair
+        self.signal_cooldown = 7200  # 2 hours in seconds
+        self.profit_tracking: Dict[str, Dict] = {}  # Track profits for each signal
         logger.info(f"SignalBroadcaster initialized for chat {chat_id}")
 
     async def start_monitoring(self):
@@ -31,6 +33,9 @@ class SignalBroadcaster:
         self.running = True
         self.session = aiohttp.ClientSession()
         logger.info(f"Started monitoring for chat {self.chat_id}")
+        
+        # Start profit tracking in background
+        asyncio.create_task(self.update_profit_tracking())
         
         while self.running:
             try:
@@ -163,10 +168,19 @@ class SignalBroadcaster:
             return None
 
         current_price = df["close"].iloc[-1]
+        current_time = datetime.now().timestamp()
+
+        # Check if we're in cooldown period for this pair
+        if pair in self.last_signals:
+            last_signal_time = self.last_signals[pair].get('timestamp', 0)
+            if current_time - last_signal_time < self.signal_cooldown:
+                logger.info(f"Signal for {pair} is in cooldown period")
+                return None
+
         signal = {
             "pair": pair,
             "price": current_price,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": current_time,
             "indicators": {},
             "action": None,
             "strength": 0
@@ -190,13 +204,13 @@ class SignalBroadcaster:
             macd = df["MACD"].iloc[-1]
             signal_line = df["Signal"].iloc[-1]
             signal["indicators"]["MACD"] = macd
-            if macd > signal_line:
+            if macd > signal_line and macd > 0:  # Added condition for stronger signals
                 if signal["action"] == "BUY":
                     signal["strength"] += 1
                 elif signal["action"] is None:
                     signal["action"] = "BUY"
                 logger.info(f"MACD buy signal for {pair}: {macd:.2f} > {signal_line:.2f}")
-            elif macd < signal_line:
+            elif macd < signal_line and macd < 0:  # Added condition for stronger signals
                 if signal["action"] == "SELL":
                     signal["strength"] += 1
                 elif signal["action"] is None:
@@ -209,13 +223,13 @@ class SignalBroadcaster:
             ema50 = df["EMA50"].iloc[-1]
             signal["indicators"]["EMA20"] = ema20
             signal["indicators"]["EMA50"] = ema50
-            if ema20 > ema50:
+            if ema20 > ema50 and current_price > ema20:  # Added price condition
                 if signal["action"] == "BUY":
                     signal["strength"] += 1
                 elif signal["action"] is None:
                     signal["action"] = "BUY"
                 logger.info(f"EMA buy signal for {pair}: {ema20:.2f} > {ema50:.2f}")
-            elif ema20 < ema50:
+            elif ema20 < ema50 and current_price < ema20:  # Added price condition
                 if signal["action"] == "SELL":
                     signal["strength"] += 1
                 elif signal["action"] is None:
@@ -228,21 +242,29 @@ class SignalBroadcaster:
             bb_lower = df["BB_lower"].iloc[-1]
             signal["indicators"]["BB_upper"] = bb_upper
             signal["indicators"]["BB_lower"] = bb_lower
-            if current_price < bb_lower:
+            if current_price < bb_lower and df["close"].iloc[-2] < df["close"].iloc[-1]:  # Added trend confirmation
                 if signal["action"] == "BUY":
                     signal["strength"] += 1
                 elif signal["action"] is None:
                     signal["action"] = "BUY"
                 logger.info(f"BB buy signal for {pair}: {current_price:.2f} < {bb_lower:.2f}")
-            elif current_price > bb_upper:
+            elif current_price > bb_upper and df["close"].iloc[-2] > df["close"].iloc[-1]:  # Added trend confirmation
                 if signal["action"] == "SELL":
                     signal["strength"] += 1
                 elif signal["action"] is None:
                     signal["action"] = "SELL"
                 logger.info(f"BB sell signal for {pair}: {current_price:.2f} > {bb_upper:.2f}")
 
-        # Only return signals with sufficient strength
+        # Only return signals with sufficient strength and matching action
         if signal["action"] and signal["strength"] >= 2:
+            # Store the signal for cooldown tracking
+            self.last_signals[pair] = signal
+            # Initialize profit tracking for this signal
+            self.profit_tracking[pair] = {
+                "entry_price": current_price,
+                "entry_time": current_time,
+                "action": signal["action"]
+            }
             logger.info(f"Strong {signal['action']} signal generated for {pair} with strength {signal['strength']}")
             return signal
         return None
@@ -281,4 +303,46 @@ class SignalBroadcaster:
             else:
                 message += f"• {indicator}: {value}\n"
 
-        return message 
+        # Add profit tracking if available
+        if signal["pair"] in self.profit_tracking:
+            tracking = self.profit_tracking[signal["pair"]]
+            if "current_profit" in tracking:
+                profit_emoji = "📈" if tracking["current_profit"] > 0 else "📉"
+                message += f"\n*Profit/Loss:* {profit_emoji} {tracking['current_profit']:.2f}%"
+
+        return message
+
+    async def update_profit_tracking(self):
+        """Update profit tracking for active signals"""
+        while self.running:
+            try:
+                for pair, tracking in self.profit_tracking.items():
+                    current_time = datetime.now().timestamp()
+                    # Only track for 24 hours
+                    if current_time - tracking["entry_time"] > 86400:  # 24 hours
+                        del self.profit_tracking[pair]
+                        continue
+
+                    # Get current price
+                    klines = await self.get_klines(pair)
+                    if not klines:
+                        continue
+
+                    current_price = float(klines[-1]["close"])
+                    entry_price = tracking["entry_price"]
+                    action = tracking["action"]
+
+                    # Calculate profit/loss
+                    if action == "BUY":
+                        profit_pct = ((current_price - entry_price) / entry_price) * 100
+                    else:  # SELL
+                        profit_pct = ((entry_price - current_price) / entry_price) * 100
+
+                    # Update profit tracking
+                    tracking["current_profit"] = profit_pct
+                    tracking["current_price"] = current_price
+
+            except Exception as e:
+                logger.error(f"Error updating profit tracking: {str(e)}", exc_info=True)
+
+            await asyncio.sleep(300)  # Update every 5 minutes 
